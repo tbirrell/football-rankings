@@ -2,7 +2,7 @@
 
 @section('content')
 <div class="container">
-  <h1>All FBS @if($week != 20)- Week {{$week}}@endif</h1>
+  <h1>All FBS @if($week != 18)- Week {{$week}}@endif</h1>
     <div class="row">
         <table class="table table-striped table-condensed">
           <thead>
