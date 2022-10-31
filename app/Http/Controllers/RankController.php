@@ -14,11 +14,11 @@ class RankController extends Controller
     }
     switch ($type) {
       case 'coaches':
-        return $this->coachesRanks($week);   
+        return $this->coachesRanks($week);
         break;
       case 'field':
       default:
-        return $this->fbsRanks($week);      
+        return $this->fbsRanks($week);
         break;
     }
   }
@@ -43,14 +43,300 @@ class RankController extends Controller
                         ->withConfLink($confLink)
                         ->withWeek($week);
     }
+
     public function fbsRanks($week = 18)
+    {
+      $pdo = DB::connection()->getPdo();
+      $sql = "SELECT *,
+       sos * average * (1 + average) as production
+       FROM (SELECT *,
+                    ROUND(wins / (wins + losses), 3)             as average,
+                    ROUND(opp_wins / (opp_wins + opp_losses), 3) as sos
+             FROM (SELECT ANY_VALUE(id)                                  as id,
+                   ANY_VALUE(the_score_id)                        as the_score_id,
+                   ANY_VALUE(school)                              as school,
+                   ANY_VALUE(conference)                          as conference,
+                   ANY_VALUE(division)                            as division,
+                   SUM(t_wins)                                    as wins,
+                   SUM(t_losses)                                  as losses,
+                   SUM(conf_wins)                                 as conf_wins,
+                   SUM(conf_losses)                               as conf_losses,
+                   SUM(o_wins)                                    as opp_wins,
+                   SUM(o_losses)                                  as opp_losses,
+                   SUM(oo_wins)                                   as oo_wins,
+                   SUM(oo_losses)                                 as oo_losses,
+                   GROUP_CONCAT(IF(t_wins = 1, o_school, null))   as beat,
+                   GROUP_CONCAT(IF(t_losses = 1, o_school, null)) as lost
+            FROM (SELECT ANY_VALUE(id)           as id,
+                         ANY_VALUE(the_score_id) as the_score_id,
+                         ANY_VALUE(school)       as school,
+                         ANY_VALUE(o_school)     as o_school,
+                         ANY_VALUE(conference)   as conference,
+                         ANY_VALUE(division)   as division,
+                         ANY_VALUE(t_wins)       as t_wins,
+                         ANY_VALUE(t_losses)     as t_losses,
+                         ANY_VALUE(conf_wins)    as conf_wins,
+                         ANY_VALUE(conf_losses)  as conf_losses,
+                         SUM(o_wins)             as o_wins,
+                         SUM(o_losses)           as o_losses,
+                         SUM(oo_wins)            as oo_wins,
+                         SUM(oo_losses)          as oo_losses
+                  FROM (SELECT ANY_VALUE(t.id)           as id,
+                               ANY_VALUE(t.school)       as school,
+                               ANY_VALUE(t.conference)   as conference,
+                               ANY_VALUE(t.division)     as division,
+                               ANY_VALUE(t.the_score_id) as the_score_id,
+                               -- team info
+                               ANY_VALUE(IF((t.id = g.home_team_id and g.home_score > g.away_score) or
+                                            (t.id = g.away_team_id and g.home_score < g.away_score), 1,
+                                            0))          as t_wins,
+                               ANY_VALUE(IF((t.id = g.home_team_id and g.home_score < g.away_score) or
+                                            (t.id = g.away_team_id and g.home_score > g.away_score), 1,
+                                            0))          as t_losses,
+                               ANY_VALUE(IF(t.conference = o.conference and
+                                            ((t.id = g.home_team_id and g.home_score > g.away_score) or
+                                             (t.id = g.away_team_id and g.home_score < g.away_score)), 1,
+                                            0))          as conf_wins,
+                               ANY_VALUE(IF(t.conference = o.conference and
+                                            ((t.id = g.home_team_id and g.home_score < g.away_score) or
+                                             (t.id = g.away_team_id and g.home_score > g.away_score)), 1,
+                                            0))          as conf_losses,
+                               -- opponents info
+                               o.id                      as o_id,
+                               ANY_VALUE(o.school)       as o_school,
+                               ANY_VALUE(IF((o.id = og.home_team_id and og.home_score > og.away_score) or
+                                            (o.id = og.away_team_id and og.home_score < og.away_score), 1,
+                                            0))          as o_wins,
+                               ANY_VALUE(IF((o.id = og.home_team_id and og.home_score < og.away_score) or
+                                            (o.id = og.away_team_id and og.home_score > og.away_score), 1,
+                                            0))          as o_losses,
+                               -- opponents of opponents info
+                               ANY_VALUE(oo.id)          as oo_id,
+                               SUM(IF((oo.id = oog.home_team_id and oog.home_score > og.away_score) or
+                                      (oo.id = oog.away_team_id and oog.home_score < oog.away_score), 1,
+                                      0))                as oo_wins,
+                               SUM(IF((oo.id = oog.home_team_id and oog.home_score < og.away_score) or
+                                      (oo.id = oog.away_team_id and oog.home_score > oog.away_score), 1,
+                                      0))                as oo_losses
+                               -- team info
+                        FROM teams t
+                              LEFT JOIN games g on (t.id = g.home_team_id or t.id = g.away_team_id)
+                         -- opponents info
+                              LEFT JOIN teams o on o.id = if(t.id = g.home_team_id, g.away_team_id, g.home_team_id)
+                              LEFT JOIN games og on (o.id = og.home_team_id or o.id = og.away_team_id)
+                         and t.id <> if(o.id = og.home_team_id, og.away_team_id, og.home_team_id)
+                         -- opponents of opponents info
+                              LEFT JOIN teams oo on oo.id = if(o.id = og.home_team_id, og.away_team_id, og.home_team_id)
+                              LEFT JOIN games oog on (oo.id = oog.home_team_id or oo.id = oog.away_team_id)
+                         and o.id <> if(oo.id = oog.home_team_id, oog.away_team_id, oog.home_team_id)
+                        WHERE t.league = 'FBS'
+                        GROUP BY t.id, o.id, oo.id) opp_opp_record -- group by opponents of opponents to derive their records
+                  group by id, o_id) opp_record -- group by oppoents to to derive their records and sum up opponents of opponents records
+            group by id) team_record -- group by teams to to derive their records and sum up opponents records
+     ) query -- handle strength of schedule and batting average math and pass the rest of the info through
+order by production desc -- sort by ranking metric";
+
+
+      $sth = $pdo->prepare($sql);
+      $sth->bindValue(':week', $week);
+      $sth->execute();
+      $teams = $sth->fetchAll(\PDO::FETCH_OBJ);
+
+      $count = count($teams);
+
+
+      //conf priority
+      for ($i=0; $i < $count-2; $i++) {
+          $swap = false;
+
+          if ($teams[$i]->wins === $teams[$i+1]->wins
+              && $teams[$i]->losses === $teams[$i+1]->losses
+              && $teams[$i]->conference === $teams[$i+1]->conference
+              && ($teams[$i]->conf_wins < $teams[$i+1]->conf_wins
+                  || ($teams[$i]->conf_wins === $teams[$i+1]->conf_wins
+                      && $teams[$i]->conf_losses > $teams[$i+1]->conf_losses
+                  )
+              )
+          ) {
+              $swap = true;
+          }
+
+          if ($swap) {
+              [$teams[$i], $teams[$i+1]] = [$teams[$i+1], $teams[$i]];
+          }
+      }
+      //head-to-head
+      do {
+        $changed = false;
+        for ($i=0; $i < $count-2; $i++) {
+            // dump("Checking {$teams[$i]->school} and ".$teams[$i+1]->school);
+            if (strpos($teams[$i]->lost, $teams[$i+1]->school.',') !== false || $teams[$i]->lost === $teams[$i+1]->school) {
+
+                // dump("{$teams[$i]->school} lost to ".$teams[$i+1]->school);
+                [$teams[$i], $teams[$i+1]] = [$teams[$i+1], $teams[$i]];
+
+                $changed = true;
+            }
+        }
+      } while ($changed);
+
+      $confLink = "/ranks/!conf!" . (($week != 18) ? "/week/{$week}" : '');
+      return view('fbs')->withTeams($teams)
+                        ->withConfLink($confLink)
+                        ->withWeek($week);
+    }
+
+
+    public function fbsRanksBcs($week = 18)
+    {
+      $pdo = DB::connection()->getPdo();
+      $sql = "SELECT *,
+       sos * average * (1 + average) as production
+       FROM (SELECT *,
+                    ROUND(wins / (wins + losses), 3) as average,
+                    ROUND((2 * (ROUND(opp_wins / (opp_wins + opp_losses), 3)) * (ROUND(oo_wins / (oo_wins + oo_losses), 3))) / 3, 3) as sos
+             FROM (SELECT ANY_VALUE(id)                                  as id,
+                   ANY_VALUE(the_score_id)                        as the_score_id,
+                   ANY_VALUE(school)                              as school,
+                   ANY_VALUE(conference)                          as conference,
+                   ANY_VALUE(division)                          as division,
+                   SUM(t_wins)                                    as wins,
+                   SUM(t_losses)                                  as losses,
+                   SUM(conf_wins)                                 as conf_wins,
+                   SUM(conf_losses)                               as conf_losses,
+                   SUM(o_wins)                                    as opp_wins,
+                   SUM(o_losses)                                  as opp_losses,
+                   SUM(oo_wins)                                   as oo_wins,
+                   SUM(oo_losses)                                 as oo_losses,
+                   GROUP_CONCAT(IF(t_wins = 1, o_school, null))   as beat,
+                   GROUP_CONCAT(IF(t_losses = 1, o_school, null)) as lost
+            FROM (SELECT ANY_VALUE(id)           as id,
+                         ANY_VALUE(the_score_id) as the_score_id,
+                         ANY_VALUE(school)       as school,
+                         ANY_VALUE(o_school)     as o_school,
+                         ANY_VALUE(conference)   as conference,
+                         ANY_VALUE(division)   as division,
+                         ANY_VALUE(t_wins)       as t_wins,
+                         ANY_VALUE(t_losses)     as t_losses,
+                         ANY_VALUE(conf_wins)    as conf_wins,
+                         ANY_VALUE(conf_losses)  as conf_losses,
+                         SUM(o_wins)             as o_wins,
+                         SUM(o_losses)           as o_losses,
+                         SUM(oo_wins)            as oo_wins,
+                         SUM(oo_losses)          as oo_losses
+                  FROM (SELECT ANY_VALUE(t.id)           as id,
+                               ANY_VALUE(t.school)       as school,
+                               ANY_VALUE(t.conference)   as conference,
+                               ANY_VALUE(t.division)     as division,
+                               ANY_VALUE(t.the_score_id) as the_score_id,
+                               -- team info
+                               ANY_VALUE(IF((t.id = g.home_team_id and g.home_score > g.away_score) or
+                                            (t.id = g.away_team_id and g.home_score < g.away_score), 1,
+                                            0))          as t_wins,
+                               ANY_VALUE(IF((t.id = g.home_team_id and g.home_score < g.away_score) or
+                                            (t.id = g.away_team_id and g.home_score > g.away_score), 1,
+                                            0))          as t_losses,
+                               ANY_VALUE(IF(t.conference = o.conference and
+                                            ((t.id = g.home_team_id and g.home_score > g.away_score) or
+                                             (t.id = g.away_team_id and g.home_score < g.away_score)), 1,
+                                            0))          as conf_wins,
+                               ANY_VALUE(IF(t.conference = o.conference and
+                                            ((t.id = g.home_team_id and g.home_score < g.away_score) or
+                                             (t.id = g.away_team_id and g.home_score > g.away_score)), 1,
+                                            0))          as conf_losses,
+                               -- opponents info
+                               o.id                      as o_id,
+                               ANY_VALUE(o.school)       as o_school,
+                               ANY_VALUE(IF((o.id = og.home_team_id and og.home_score > og.away_score) or
+                                            (o.id = og.away_team_id and og.home_score < og.away_score), 1,
+                                            0))          as o_wins,
+                               ANY_VALUE(IF((o.id = og.home_team_id and og.home_score < og.away_score) or
+                                            (o.id = og.away_team_id and og.home_score > og.away_score), 1,
+                                            0))          as o_losses,
+                               -- opponents of opponents info
+                               ANY_VALUE(oo.id)          as oo_id,
+                               SUM(IF((oo.id = oog.home_team_id and oog.home_score > og.away_score) or
+                                      (oo.id = oog.away_team_id and oog.home_score < oog.away_score), 1,
+                                      0))                as oo_wins,
+                               SUM(IF((oo.id = oog.home_team_id and oog.home_score < og.away_score) or
+                                      (oo.id = oog.away_team_id and oog.home_score > oog.away_score), 1,
+                                      0))                as oo_losses
+                               -- team info
+                        FROM teams t
+                              LEFT JOIN games g on (t.id = g.home_team_id or t.id = g.away_team_id)
+                         -- opponents info
+                              LEFT JOIN teams o on o.id = if(t.id = g.home_team_id, g.away_team_id, g.home_team_id)
+                              LEFT JOIN games og on (o.id = og.home_team_id or o.id = og.away_team_id)
+                         and t.id <> if(o.id = og.home_team_id, og.away_team_id, og.home_team_id)
+                         -- opponents of opponents info
+                              LEFT JOIN teams oo on oo.id = if(o.id = og.home_team_id, og.away_team_id, og.home_team_id)
+                              LEFT JOIN games oog on (oo.id = oog.home_team_id or oo.id = oog.away_team_id)
+                         and o.id <> if(oo.id = oog.home_team_id, oog.away_team_id, oog.home_team_id)
+                        WHERE t.league = 'FBS'
+                        GROUP BY t.id, o.id, oo.id) opp_opp_record -- group by opponents of opponents to derive their records
+                  group by id, o_id) opp_record -- group by oppoents to to derive their records and sum up opponents of opponents records
+            group by id) team_record -- group by teams to to derive their records and sum up opponents records
+     ) query -- handle strength of schedule and batting average math and pass the rest of the info through
+order by production desc -- sort by ranking metric";
+
+
+      $sth = $pdo->prepare($sql);
+//      $sth->bindValue(':week', $week);
+      $sth->execute();
+      $teams = $sth->fetchAll(\PDO::FETCH_OBJ);
+
+      $count = count($teams);
+
+      //conf priority
+      for ($i=0; $i < $count-2; $i++) {
+          $swap = false;
+
+          if ($teams[$i]->wins === $teams[$i+1]->wins
+              && $teams[$i]->losses === $teams[$i+1]->losses
+              && $teams[$i]->conference === $teams[$i+1]->conference
+              && ($teams[$i]->conf_wins < $teams[$i+1]->conf_wins
+                  || ($teams[$i]->conf_wins === $teams[$i+1]->conf_wins
+                      && $teams[$i]->conf_losses > $teams[$i+1]->conf_losses
+                  )
+              )
+          ) {
+              $swap = true;
+          }
+
+          if ($swap) {
+              [$teams[$i], $teams[$i+1]] = [$teams[$i+1], $teams[$i]];
+          }
+      }
+      //head-to-head
+      do {
+        $changed = false;
+        for ($i=0; $i < $count-2; $i++) {
+            // dump("Checking {$teams[$i]->school} and ".$teams[$i+1]->school);
+            if (strpos($teams[$i]->lost, $teams[$i+1]->school.',') !== false || $teams[$i]->lost === $teams[$i+1]->school) {
+
+                // dump("{$teams[$i]->school} lost to ".$teams[$i+1]->school);
+                [$teams[$i], $teams[$i+1]] = [$teams[$i+1], $teams[$i]];
+
+                $changed = true;
+            }
+        }
+      } while ($changed);
+
+      $confLink = "/ranks/!conf!" . (($week != 18) ? "/week/{$week}" : '');
+      return view('fbs')->withTeams($teams)
+                        ->withConfLink($confLink)
+                        ->withWeek($week);
+    }
+
+
+    public function fbsRanksOld($week = 18)
     {
       $pdo = DB::connection()->getPdo();
       $sql = "SELECT ANY_VALUE(school) as school, COALESCE(GROUP_CONCAT(the_score_id)) as the_score_id, COALESCE(GROUP_CONCAT(conference)) as conference, COALESCE(GROUP_CONCAT(division)) as division, SUM(wins) as wins, SUM(losses) as losses, SUM(opp_wins) as opp_wins, SUM(opp_losses) as opp_losses, SUM(conf_wins) as conf_wins, SUM(conf_losses) as conf_losses, COALESCE(GROUP_CONCAT(beat)) as beat, COALESCE(GROUP_CONCAT(lost)) as lost, CONCAT(SUM(wins),'-',SUM(losses),'-',SUM(opp_wins),'-',SUM(opp_losses),'-',SUM(conf_wins),'-',SUM(conf_losses)) as tuple
 
                 FROM (
                     SELECT ANY_VALUE(t.school) as school, null as the_score_id, null as conference, null as division, null as wins, null as losses, null as conf_wins, null as conf_losses,
-                    SUM(IF((o.id = og.home_team_id and og.home_score > og.away_score) or (o.id = og.away_team_id and og.home_score < og.away_score), 1, 0)) as opp_wins, 
+                    SUM(IF((o.id = og.home_team_id and og.home_score > og.away_score) or (o.id = og.away_team_id and og.home_score < og.away_score), 1, 0)) as opp_wins,
                     SUM(IF((o.id = og.home_team_id and og.home_score < og.away_score) or (o.id = og.away_team_id and og.home_score > og.away_score), 1, 0)) as opp_losses,
                     null as beat, null as lost
                     FROM teams t
@@ -65,12 +351,12 @@ class RankController extends Controller
                     UNION ALL
 
                     SELECT ANY_VALUE(t.school) as school, ANY_VALUE(t.the_score_id) as the_score_id, ANY_VALUE(t.conference) as conference, ANY_VALUE(t.division) as division,
-                    SUM(IF((t.id = g.home_team_id and g.home_score > g.away_score) or (t.id = g.away_team_id and g.home_score < g.away_score), 1, 0)) as win, 
+                    SUM(IF((t.id = g.home_team_id and g.home_score > g.away_score) or (t.id = g.away_team_id and g.home_score < g.away_score), 1, 0)) as win,
                     SUM(IF((t.id = g.home_team_id and g.home_score < g.away_score) or (t.id = g.away_team_id and g.home_score > g.away_score), 1, 0)) as loss,
-                    SUM(IF(t.conference = o.conference and ((t.id = g.home_team_id and g.home_score > g.away_score) or (t.id = g.away_team_id and g.home_score < g.away_score)), 1, 0)) as conf_win, 
+                    SUM(IF(t.conference = o.conference and ((t.id = g.home_team_id and g.home_score > g.away_score) or (t.id = g.away_team_id and g.home_score < g.away_score)), 1, 0)) as conf_win,
                     SUM(IF(t.conference = o.conference and ((t.id = g.home_team_id and g.home_score < g.away_score) or (t.id = g.away_team_id and g.home_score > g.away_score)), 1, 0)) as conf_losses,
                     null as opp_wins, null as opp_losses,
-                    GROUP_CONCAT(IF((t.id = g.home_team_id and g.home_score > g.away_score) or (t.id = g.away_team_id and g.home_score < g.away_score), o.school, null)) as beat, 
+                    GROUP_CONCAT(IF((t.id = g.home_team_id and g.home_score > g.away_score) or (t.id = g.away_team_id and g.home_score < g.away_score), o.school, null)) as beat,
                     GROUP_CONCAT(IF((t.id = g.home_team_id and g.home_score < g.away_score) or (t.id = g.away_team_id and g.home_score > g.away_score), o.school, null)) as lost
                     FROM teams t
                     LEFT JOIN games g on (t.id = g.home_team_id or t.id = g.away_team_id)
@@ -97,7 +383,7 @@ class RankController extends Controller
       // }
       // $teams = [];
       // $cc = count($chunks);
-      // for ($i=$cc-1; $i >= 0; $i--) { 
+      // for ($i=$cc-1; $i >= 0; $i--) {
 
       //   if (count($chunks["{$i}wins"]) > 1 && $i > 7) {
       //     $lowest_sos = null;
@@ -131,14 +417,14 @@ class RankController extends Controller
       // }
 // die;
       //conf priority
-      for ($i=0; $i < $count-2; $i++) { 
+      for ($i=0; $i < $count-2; $i++) {
           $swap = false;
 
           if ($teams[$i]->wins === $teams[$i+1]->wins
               && $teams[$i]->losses === $teams[$i+1]->losses
               && $teams[$i]->conference === $teams[$i+1]->conference
               && ($teams[$i]->conf_wins < $teams[$i+1]->conf_wins
-                  || ($teams[$i]->conf_wins === $teams[$i+1]->conf_wins 
+                  || ($teams[$i]->conf_wins === $teams[$i+1]->conf_wins
                       && $teams[$i]->conf_losses > $teams[$i+1]->conf_losses
                   )
               )
@@ -178,7 +464,7 @@ class RankController extends Controller
       $sql = "SELECT ANY_VALUE(school) as school, COALESCE(GROUP_CONCAT(the_score_id)) as the_score_id, COALESCE(GROUP_CONCAT(conference)) as conference, COALESCE(GROUP_CONCAT(division)) as division, SUM(wins) as wins, SUM(losses) as losses, SUM(opp_wins) as opp_wins, SUM(opp_losses) as opp_losses, SUM(conf_wins) as conf_wins, SUM(conf_losses) as conf_losses, COALESCE(GROUP_CONCAT(beat)) as beat, COALESCE(GROUP_CONCAT(lost)) as lost
               FROM
                 (SELECT ANY_VALUE(t.school) as school, null as the_score_id, null as conference, null as division, null as wins, null as losses, null as conf_wins, null as conf_losses,
-                SUM(IF((o.id = og.home_team_id and og.home_score > og.away_score) or (o.id = og.away_team_id and og.home_score < og.away_score), 1, 0)) as opp_wins, 
+                SUM(IF((o.id = og.home_team_id and og.home_score > og.away_score) or (o.id = og.away_team_id and og.home_score < og.away_score), 1, 0)) as opp_wins,
                 SUM(IF((o.id = og.home_team_id and og.home_score < og.away_score) or (o.id = og.away_team_id and og.home_score > og.away_score), 1, 0)) as opp_losses,
                 null as beat, null as lost
                 FROM teams t
@@ -194,12 +480,12 @@ class RankController extends Controller
                 UNION ALL
 
                 SELECT ANY_VALUE(t.school) as school, ANY_VALUE(t.the_score_id) as the_score_id, ANY_VALUE(t.conference) as conference, ANY_VALUE(t.division) as division,
-                SUM(IF((t.id = g.home_team_id and g.home_score > g.away_score) or (t.id = g.away_team_id and g.home_score < g.away_score), 1, 0)) as win, 
+                SUM(IF((t.id = g.home_team_id and g.home_score > g.away_score) or (t.id = g.away_team_id and g.home_score < g.away_score), 1, 0)) as win,
                 SUM(IF((t.id = g.home_team_id and g.home_score < g.away_score) or (t.id = g.away_team_id and g.home_score > g.away_score), 1, 0)) as loss,
-                SUM(IF(t.conference = o.conference and ((t.id = g.home_team_id and g.home_score > g.away_score) or (t.id = g.away_team_id and g.home_score < g.away_score)), 1, 0)) as conf_win, 
+                SUM(IF(t.conference = o.conference and ((t.id = g.home_team_id and g.home_score > g.away_score) or (t.id = g.away_team_id and g.home_score < g.away_score)), 1, 0)) as conf_win,
                 SUM(IF(t.conference = o.conference and ((t.id = g.home_team_id and g.home_score < g.away_score) or (t.id = g.away_team_id and g.home_score > g.away_score)), 1, 0)) as conf_losses,
                 null as opp_wins, null as opp_losses,
-                GROUP_CONCAT(IF((t.id = g.home_team_id and g.home_score > g.away_score) or (t.id = g.away_team_id and g.home_score < g.away_score), o.school, null)) as beat, 
+                GROUP_CONCAT(IF((t.id = g.home_team_id and g.home_score > g.away_score) or (t.id = g.away_team_id and g.home_score < g.away_score), o.school, null)) as beat,
                 GROUP_CONCAT(IF((t.id = g.home_team_id and g.home_score < g.away_score) or (t.id = g.away_team_id and g.home_score > g.away_score), o.school, null)) as lost
                 FROM teams t
                 LEFT JOIN games g on (t.id = g.home_team_id or t.id = g.away_team_id)
@@ -322,12 +608,12 @@ class RankController extends Controller
         'http_code'    => 200
     );
     $response = '';
-    
+
     $send_header = array(
         'Accept' => 'text/*',
         'User-Agent' => 'BinGet/1.00.A (http://www.bin-co.com/php/scripts/load/)'
     ) + $options['headers']; // Add custom headers provided by the user.
-    
+
     if($options['cache']) {
         $cache_folder = joinPath(sys_get_temp_dir(), 'php-load-function');
         if(isset($options['cache_folder'])) $cache_folder = $options['cache_folder'];
@@ -336,24 +622,24 @@ class RankController extends Controller
             mkdir($cache_folder, 0777);
             umask($old_umask);
         }
-        
+
         $cache_file_name = md5($url) . '.cache';
         $cache_file = joinPath($cache_folder, $cache_file_name); //Don't change the variable name - used at the end of the function.
-        
+
         if(file_exists($cache_file)) { // Cached file exists - return that.
             $response = file_get_contents($cache_file);
-            
+
             //Seperate header and content
             $separator_position = strpos($response,"\r\n\r\n");
             $header_text = substr($response,0,$separator_position);
             $body = substr($response,$separator_position+4);
-            
+
             foreach(explode("\n",$header_text) as $line) {
                 $parts = explode(": ",$line);
                 if(count($parts) == 2) $headers[$parts[0]] = chop($parts[1]);
             }
             $headers['cached'] = true;
-            
+
             if(!$options['return_info']) return $body;
             else return array('headers' => $headers, 'body' => $body, 'info' => array('cached'=>true));
         }
@@ -361,7 +647,7 @@ class RankController extends Controller
 
     if(isset($options['post_data'])) { //There is an option to specify some data to be posted.
         $options['method'] = 'post';
-        
+
         if(is_array($options['post_data'])) { //The data is in array format.
             $post_data = array();
             foreach($options['post_data'] as $key=>$value) {
@@ -391,20 +677,20 @@ class RankController extends Controller
 
     ///////////////////////////// Curl /////////////////////////////////////
     //If curl is available, use curl to get the data.
-    if(function_exists("curl_init") 
+    if(function_exists("curl_init")
                 and (!(isset($options['use']) and $options['use'] == 'fsocketopen'))) { //Don't use curl if it is specifically stated to use fsocketopen in the options
-        
+
         if(isset($options['post_data'])) { //There is an option to specify some data to be posted.
             $page = $url;
             $options['method'] = 'post';
-            
+
             if(is_array($options['post_data'])) { //The data is in array format.
                 $post_data = array();
                 foreach($options['post_data'] as $key=>$value) {
                     $post_data[] = "$key=" . urlencode($value);
                 }
                 $url_parts['query'] = implode('&', $post_data);
-            
+
             } else { //Its a string
                 $url_parts['query'] = $options['post_data'];
             }
@@ -418,7 +704,7 @@ class RankController extends Controller
 
         if($options['session'] and isset($GLOBALS['_binget_curl_session'])) $ch = $GLOBALS['_binget_curl_session']; //Session is stored in a global variable
         else $ch = curl_init($url_parts['host']);
-        
+
         curl_setopt($ch, CURLOPT_URL, $page) or die("Invalid cURL Handle Resouce");
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true); //Just return the data - not print the whole thing.
         curl_setopt($ch, CURLOPT_HEADER, true); //We need the headers
@@ -435,12 +721,12 @@ class RankController extends Controller
                             //  :TODO:
                             $dir = sys_get_temp_dir();
                             $prefix = 'load';
-                            
+
                             if (substr($dir, -1) != '/') $dir .= '/';
                             do {
                                 $path = $dir . $prefix . mt_rand(0, 9999999);
                             } while (!mkdir($path, $mode));
-                        
+
                             $tmpdir = $path;
                         }
                         $tmpfile = $tmpdir.'/'.$data['filename'];
@@ -498,7 +784,7 @@ class RankController extends Controller
         }
 
         $info = curl_getinfo($ch); //Some information on the fetch
-        
+
         if($options['session'] and !$options['session_close']) $GLOBALS['_binget_curl_session'] = $ch; //Dont close the curl session. We may need it later - save it to a global variable
         else curl_close($ch);  //If the session option is not set, close the session.
 
@@ -509,7 +795,7 @@ class RankController extends Controller
             $page = $url_parts['path'];
         else
             $page = $url_parts['path'] . '?' . $url_parts['query'];
-        
+
         if(!isset($url_parts['port'])) $url_parts['port'] = ($url_parts['scheme'] == 'https' ? 443 : 80);
         $host = ($url_parts['scheme'] == 'https' ? 'ssl://' : '').$url_parts['host'];
         $fp = fsockopen($host, $url_parts['port'], $errno, $errstr, 30);
@@ -531,7 +817,7 @@ class RankController extends Controller
         }
         }
             $out .= "Connection: Close\r\n";
-            
+
             //HTTP Basic Authorization support
             if(isset($url_parts['user']) and isset($url_parts['pass'])) {
                 $out .= "Authorization: Basic ".base64_encode($url_parts['user'].':'.$url_parts['pass']) . "\r\n";
@@ -606,7 +892,7 @@ class RankController extends Controller
         //Seperate header and content
         $header_text = substr($response, 0, $info['header_size']);
         $body = substr($response, $info['header_size']);
-        
+
         foreach(explode("\n",$header_text) as $line) {
             $parts = explode(": ",$line);
             if(count($parts) == 2) {
@@ -620,7 +906,7 @@ class RankController extends Controller
         }
 
     }
-    
+
     if(isset($cache_file)) { //Should we cache the URL?
         file_put_contents($cache_file, $response);
     }

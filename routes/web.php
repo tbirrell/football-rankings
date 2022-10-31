@@ -16,6 +16,8 @@ Auth::routes();
 Route::get('/ranks/all-fbs/week/{week?}', 'RankController@fbsRanks');
 Route::get('/ranks/all-fbs', 'RankController@fbsRanks');
 Route::get('/', 'RankController@fbsRanks');
+Route::get('/bcs', 'RankController@fbsRanksBcs');
+Route::get('/old', 'RankController@fbsRanksOld');
 
 Route::get('/ranks/{?type}/week/{week?}', 'RankController@show');
 Route::get('/ranks/{?type}', 'RankController@show');
