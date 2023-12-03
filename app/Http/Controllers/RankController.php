@@ -131,7 +131,8 @@ class RankController extends Controller
                          and o.id <> if(oo.id = oog.home_team_id, oog.away_team_id, oog.home_team_id)
                         WHERE t.league = 'FBS'
                         GROUP BY t.id, o.id, oo.id) opp_opp_record -- group by opponents of opponents to derive their records
-                  group by id, o_id) opp_record -- group by oppoents to to derive their records and sum up opponents of opponents records
+		  group by id, o_id) opp_record -- group by oppoents to to derive their records and sum up opponents of opponents records
+                  WHERE school NOT IN ('Washington2','Oregon2')
             group by id) team_record -- group by teams to to derive their records and sum up opponents records
      ) query -- handle strength of schedule and batting average math and pass the rest of the info through
 order by production desc -- sort by ranking metric";
